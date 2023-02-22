@@ -1,21 +1,11 @@
 package com.example.camerax;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.CameraX;
-import androidx.camera.core.ImageCapture;
-import androidx.camera.core.ImageCaptureConfig;
-import androidx.camera.core.Preview;
-import androidx.camera.core.PreviewConfig;
-import androidx.lifecycle.LifecycleOwner;
-
 import android.Manifest;
 import android.content.ContentValues;
-import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
@@ -29,17 +19,35 @@ import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.core.CameraX;
+import androidx.camera.core.ImageCapture;
+import androidx.camera.core.ImageCaptureConfig;
+import androidx.camera.core.Preview;
+import androidx.camera.core.PreviewConfig;
+import androidx.lifecycle.LifecycleOwner;
+
 import java.io.File;
+import java.io.OutputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
     Button btnClickPhoto, btnOpenCamera;
     TextureView textureView;
 
+    ImageView imageView;
+
     private PermissionManager permissionManager;
     private String[] permissions = {Manifest.permission.CAMERA,
             Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE};
     private ImageCapture imgCap;
+    private ExecutorService executorService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,11 +57,15 @@ public class MainActivity extends AppCompatActivity {
         btnClickPhoto = findViewById(R.id.btnClickPhoto);
         btnOpenCamera = findViewById(R.id.btnOpenCamera);
         textureView = findViewById(R.id.textureView);
+        imageView = findViewById(R.id.imageView);
+
+        executorService = Executors.newSingleThreadExecutor();
 
         permissionManager = PermissionManager.getInstance(this);
 
         btnOpenCamera.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
+            @Override
+            public void onClick(View v) {
                 if (!permissionManager.checkPermissions(permissions)) {
                     permissionManager.askPermissions(MainActivity.this, permissions, 100);
                 } else {
@@ -64,14 +76,16 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnClickPhoto.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
+            @Override
+            public void onClick(View v) {
                 clickPhoto();
             }
         });
     }
 
-    @Override public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                                     @NonNull int[] grantResults) {
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == 100) {
             permissionManager.handlePermissionResult(MainActivity.this, 100, permissions,
@@ -150,40 +164,60 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void clickPhoto() {
-        File file =
-                new File(Environment.getExternalStorageDirectory() + "/" + System.currentTimeMillis() + ".png");
-        imgCap.takePicture(file, new ImageCapture.OnImageSavedListener() {
-            @Override
-            public void onImageSaved(@NonNull File file) {
-                String msg = "Pic captured at " + file.getAbsolutePath();
-                Bitmap bitmap = BitmapFactory.decodeFile(file.getPath());
-                Toast.makeText(getBaseContext(), msg, Toast.LENGTH_LONG).show();
-
-                addImageToGallery(file.getPath(), MainActivity.this);
-            }
-
-            @Override
-            public void onError(@NonNull ImageCapture.UseCaseError useCaseError,
-                                @NonNull String message,
-                                @Nullable Throwable cause) {
-                String msg = "Pic capture failed : " + message;
-                Toast.makeText(getBaseContext(), msg, Toast.LENGTH_LONG).show();
-                if (cause != null) {
-                    cause.printStackTrace();
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String imageFileName = "PNG_" + timeStamp + "_";
+        File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        File image = null;
+        try {
+            image = File.createTempFile(imageFileName, ".png", storageDir);
+            imgCap.takePicture(image, new ImageCapture.OnImageSavedListener() {
+                @Override
+                public void onImageSaved(@NonNull File file) {
+                    String msg = "Pic captured at " + file.getAbsolutePath();
+                    Toast.makeText(MainActivity.this, "Processing image please wait...don't close the app yet.", Toast.LENGTH_LONG).show();
+                    addImageToGallery(file);
                 }
-            }
-        });
+
+                @Override
+                public void onError(@NonNull ImageCapture.UseCaseError useCaseError,
+                                    @NonNull String message,
+                                    @Nullable Throwable cause) {
+                    String msg = "Pic capture failed : " + message;
+                    Toast.makeText(getBaseContext(), msg, Toast.LENGTH_LONG).show();
+                    if (cause != null) {
+                        cause.printStackTrace();
+                    }
+                }
+            });
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
     }
 
-    public static void addImageToGallery(final String filePath, final Context context) {
+    public void addImageToGallery(final File file) {
+        executorService.execute(() -> {
+            Bitmap bitmap = BitmapFactory.decodeFile(file.getPath());
 
-        ContentValues values = new ContentValues();
+            ContentValues values = new ContentValues();
 
-        values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis());
-        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-        values.put(MediaStore.MediaColumns.DATA, filePath);
+            values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis());
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+            values.put(MediaStore.MediaColumns.DATA, file.getPath());
 
-        context.getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            Uri uri = this.getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, "Image has been saved to the gallery, now you can close the app and check the gallery.", Toast.LENGTH_SHORT).show());
+
+            try {
+                OutputStream fos = this.getContentResolver().openOutputStream(uri);
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                fos.close();
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Image has been saved to the gallery, now you can close the app and check the gallery.", Toast.LENGTH_SHORT).show());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 
 }
